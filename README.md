@@ -89,6 +89,7 @@ developer portal) — it logs `HIBERNATING` instead. Check the Developer Program
 | Schema | `describe_table` (fields incl. inherited, types, references) |
 | Records | `query_records`, `get_record`, `create_record`, `update_record`, `delete_record`, `aggregate` |
 | Dev / debug | `run_script` (Scripts - Background, any scope), `search_scripts` (code search across script tables), `get_logs` (syslog) |
+| Debugging | `check_access` (impersonate a user: read/write/create/delete + field checks, every relevant ACL with roles/condition/script result), `flow_executions` (Flow Designer runs: state, errors, logs, approvals for a record), `email_trace` (events → emails → notifications for a record, condition match, mail settings), `run_atf` (run a test or suite, per-step results) |
 | Update sets | `list_update_sets`, `set_current_update_set` (also switches current application), `get_update_set_changes` |
 | Update set migration | `migrate_update_set` (export → import → preview, optional commit), `resolve_preview_problems` (accept / skip), `commit_update_set` |
 | Cross-instance | `compare_records` (diff dev vs test), `copy_records` (same sys_id, dry run first) |
@@ -106,4 +107,9 @@ developer portal) — it logs `HIBERNATING` instead. Check the Developer Program
   not supported yet.
 - REST calls are stateless (no session cookie) so a switched update set / application is honoured
   immediately; `set_current_update_set` also persists `apps.current_app`.
+- `check_access` impersonates the user inside a background script and always switches back. Deny-unless
+  ACLs are shown as DENIES / does not deny; security attributes are listed but not evaluated.
+- `flow_executions` shows step-level detail only if flow reporting is on
+  (`com.snc.process_flow.reporting.level`); `run_atf` needs `sn_atf.runner.enabled=true`, and tests with
+  UI steps need a client test runner open in a browser.
 - Hibernating PDIs are detected and reported; wake them at developer.servicenow.com.

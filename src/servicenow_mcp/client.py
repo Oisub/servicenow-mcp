@@ -182,6 +182,12 @@ class SNClient:
             re.search(r"""value=["']([^"']+)["'][^>]*name=["']sysparm_ck["']""", page.text)
         return m.group(1) if m else None
 
+    async def reset_ui_session(self) -> None:
+        async with self._ui_lock:
+            if self._ui:
+                await self._ui.aclose()
+            self._ui = None
+
     async def _ui_session(self) -> httpx.AsyncClient:
         if self._ui is None:
             self._ui = await self._login()
@@ -267,8 +273,9 @@ def _extract_script_output(page: str) -> str:
     lines = [ln.strip() for ln in text.splitlines()]
     lines = [ln for ln in lines if ln and ln not in ("Script execution history", "available here")]
     # Drop Java stack frames from script errors; the error message itself is kept.
-    lines = [ln for ln in lines if not JAVA_FRAME.match(ln)]
+    lines = [ln for ln in lines if not JAVA_FRAME.match(ln) and not SQL_DEBUG.match(ln)]
     return "\n".join(lines)
 
 
+SQL_DEBUG = re.compile(r"^Time: \d+:\d+:\d+\.\d+ id: .* for: ")  # session SQL debug output
 JAVA_FRAME = re.compile(r"^(com|org|java|jdk|sun)\.[\w.$/]+\(.*\)$")

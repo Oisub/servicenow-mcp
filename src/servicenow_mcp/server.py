@@ -12,7 +12,7 @@ from typing import Any, Literal
 from mcp.server.mcpserver import MCPServer
 
 from .client import ServiceNowError, SNClient
-from . import auth, config, keepalive, updateset
+from . import auth, config, debugtools, keepalive, updateset
 from .config import ConfigError, load_instances
 
 mcp = MCPServer(
@@ -439,6 +439,51 @@ async def get_logs(minutes: int = 15, level: Literal["error", "warning", "info",
                              sysparm_fields="sys_created_on,level,source,message",
                              sysparm_display_value="true")
     return [{**r, "message": _short(r.get("message"), 1000)} for r in rows]
+
+
+@mcp.tool()
+async def check_access(user: str, table: str, sys_id: str | None = None,
+                       operations: list[Literal["read", "write", "create", "delete"]] | None = None,
+                       fields: list[str] | None = None, instance: str | None = None) -> dict:
+    """Explain record access for a user: impersonates `user` (user_name, email, name or sys_id),
+    checks read/write/create/delete on `table` (a specific record via sys_id, or a new record),
+    and lists every relevant record ACL (table hierarchy, table.*, table.field, *) with whether
+    its roles, condition and script pass. `fields` adds field-level checks. Read-only."""
+    c = await _client(instance)
+    return await debugtools.check_access(c, user, table, sys_id,
+                                         operations or ["read", "write", "create", "delete"], fields)
+
+
+@mcp.tool()
+async def flow_executions(flow: str | None = None, record: str | None = None, table: str | None = None,
+                          state: Literal["IN_PROGRESS", "WAITING", "COMPLETE", "ERROR", "CANCELLED"] | None = None,
+                          hours: int = 24, limit: int = 10, include_test_runs: bool = False,
+                          instance: str | None = None) -> dict:
+    """Recent Flow Designer executions, newest first: state, errors and flow logs. Filter by flow
+    name (contains), by source `record` (number like RITM0010001 or sys_id; pass `table` for
+    non-task records) and/or state. With a record it also lists its approvals."""
+    c = await _client(instance)
+    return await debugtools.flow_executions(c, flow, record, table, state, hours, limit, include_test_runs)
+
+
+@mcp.tool()
+async def email_trace(record: str, table: str | None = None, hours: int = 72,
+                      instance: str | None = None) -> dict:
+    """Trace notifications for a record (number or sys_id; pass `table` for non-task records):
+    events fired, emails generated (type, recipients, errors, which notification), every active
+    notification on the table with its trigger and whether its condition matches the record now,
+    plus instance mail settings that commonly explain 'no email was sent'."""
+    c = await _client(instance)
+    return await debugtools.email_trace(c, record, table, hours)
+
+
+@mcp.tool()
+async def run_atf(test: str | None = None, suite: str | None = None, wait_seconds: int = 300,
+                  instance: str | None = None) -> dict:
+    """Run an ATF test or every active test of a suite (name or sys_id) and return per-step
+    results. Tests with UI steps need a client test runner open in a browser."""
+    c = await _client(instance)
+    return await debugtools.run_atf(c, test, suite, wait_seconds)
 
 
 # ------------------------------------------------------------- update sets
