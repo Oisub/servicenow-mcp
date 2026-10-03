@@ -1,7 +1,50 @@
 # servicenow-mcp
 
-ServiceNow MCP server for Claude Code, focused on development, debugging and keeping
-multiple instances (dev / test / ...) in sync.
+An [MCP](https://modelcontextprotocol.io) server that lets Claude (or any MCP client) do real
+**ServiceNow development** work — not just read records, but run server-side scripts, debug ACLs,
+flows and notifications, run ATF tests, analyse impact, and move update sets between instances.
+
+**Who it's for:** ServiceNow developers who work across several personal developer / sub-prod
+instances and want an AI assistant that can actually build, debug and verify on them.
+
+**What makes it different from a plain Table-API wrapper:**
+
+- **Runs server-side scripts** (Scripts - Background) in any application scope — full Glide API.
+- **Debugs the hard things**: `check_access` impersonates a user and explains every ACL;
+  `flow_executions`, `email_trace` and `run_atf` turn "why didn't this work" into one answer.
+- **Impact analysis & audit**: `where_used` finds every reference to a table/field/script before you
+  change it; `change_history` shows what changed, by whom, in which update set.
+- **Multi-instance**: compare and copy records across instances, and migrate update sets through the
+  platform's own export → preview → commit path.
+- **Just works**: OAuth is set up automatically when an instance restricts Basic auth; PDIs can be
+  kept awake; credentials live in the OS credential store, never in files or the chat.
+
+### Example asks
+
+Once connected, you can say things like:
+
+- "Why can't `abel.tuter` edit INC0010023? Which ACL is blocking it?"
+- "RITM0010005 didn't send its approval email — trace it."
+- "What would break if I rename the `u_deal` field on the task table?"
+- "What did the team change in `x_acme_app` this week?"
+- "Run the 'Credit check routing' ATF test and show me which step failed."
+- "Migrate the 'Approval rework' update set from dev to test, preview first."
+
+## Quickstart
+
+Requires [uv](https://docs.astral.sh/uv/) and Python 3.11+, and an MCP client (e.g. Claude Code).
+
+```powershell
+git clone https://github.com/Oisub/servicenow-mcp
+cd servicenow-mcp
+uv sync
+claude mcp add -s user servicenow -- "$PWD\.venv\Scripts\servicenow-mcp.exe"   # Windows
+# macOS / Linux: claude mcp add -s user servicenow -- "$PWD/.venv/bin/servicenow-mcp"
+```
+
+The **first** ServiceNow request with no instance configured opens a small dialog to enter the
+instance URL, username and password; the login is verified and the password is stored in your OS
+credential manager before anything else runs. That's it — ask away.
 
 > [!WARNING]
 > **Security.** This server acts with the full rights of the account you give it — with an admin
@@ -12,21 +55,6 @@ multiple instances (dev / test / ...) in sync.
 > - Passwords are kept in the OS credential store, never in files or in the conversation, but anyone
 >   who can run code as your OS user can read them.
 > - Provided as-is, without warranty. You are responsible for what it does on your instances.
-
-## Install
-
-Requires [uv](https://docs.astral.sh/uv/) and Python 3.11+.
-
-```powershell
-git clone https://github.com/Oisub/servicenow-mcp
-cd servicenow-mcp
-uv sync
-claude mcp add -s user servicenow -- "$PWD\.venv\Scripts\servicenow-mcp.exe"   # Windows
-# macOS / Linux: claude mcp add -s user servicenow -- "$PWD/.venv/bin/servicenow-mcp"
-```
-
-On first use (the first ServiceNow tool call with no instance configured) a dialog opens to
-enter the instance URL, username and password. The login is verified before saving.
 
 ## Instances
 
@@ -118,3 +146,9 @@ developer portal) — it logs `HIBERNATING` instead. Check the Developer Program
   the assistant to use the API tools first, open exact URLs from `ui_link`, check one thing and stop,
   and ask the user to log in instead of typing credentials.
 - Hibernating PDIs are detected and reported; wake them at developer.servicenow.com.
+
+## License
+
+MIT © Dorian Shu. See [LICENSE](LICENSE).
+
+> Not affiliated with or endorsed by ServiceNow, Inc. "ServiceNow" is a trademark of its owner.

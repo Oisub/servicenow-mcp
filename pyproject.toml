@@ -2,6 +2,8 @@
 name = "servicenow-mcp"
 version = "0.1.0"
 description = "ServiceNow MCP server for development, debugging and multi-instance environment setup"
+license = "MIT"
+authors = [{ name = "Dorian Shu" }]
 requires-python = ">=3.11"
 dependencies = [
     "mcp>=2.3,<3",
