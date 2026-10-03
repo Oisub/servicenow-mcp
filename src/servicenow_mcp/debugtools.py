@@ -212,6 +212,9 @@ async def flow_executions(c: SNClient, flow: str | None, record: str | None, tab
         "flow": flow or "", "record": record or "", "table": table or "", "state": state or "",
         "hours": hours, "limit": limit, "include_tests": include_tests,
     })
+    base = c.instance.url
+    for e in out.get("executions", []):
+        e["ui_url"] = f"{base}/now/workflow-studio/builder?tableName=sys_flow_context&builderId=flow-execution&sysId={e['sys_id']}"
     if out.get("reporting_level", "OFF") == "OFF":
         out["note"] = ("Flow reporting is OFF, so per-step inputs/outputs are not recorded. To debug a "
                        "flow step by step, set com.snc.process_flow.reporting.level=TRACE and re-run it.")
@@ -263,6 +266,10 @@ out.notifications = []; while (n.next()) {
 
 async def email_trace(c: SNClient, record: str, table: str | None, hours: int) -> dict:
     out = await script_json(c, EMAIL_JS, {"record": record, "table": table or "", "hours": hours})
+    for e in out.get("emails", []):
+        e["ui_url"] = f"{c.instance.url}/sys_email.do?sys_id={e['sys_id']}"
+    for n in out.get("notifications", []):
+        n["ui_url"] = f"{c.instance.url}/sysevent_email_action.do?sys_id={n['sys_id']}"
     hints = []
     if out["system"]["smtp_sending_enabled"] != "true":
         hints.append("Outbound email is disabled on this instance (glide.email.smtp.active=false): "
@@ -336,9 +343,13 @@ async def run_atf(c: SNClient, test: str | None, suite: str | None, wait_seconds
         tracker = await wait_tracker(c, started["tracker"], wait_seconds)
         res = await script_json(c, ATF_RESULT_JS, {"tracker": started["tracker"]})
         entry = {"test": t["name"], "status": res.get("status"), **{k: v for k, v in res.items() if k != "status"}}
+        if res.get("result_sys_id"):
+            entry["ui_url"] = f"{c.instance.url}/sys_atf_test_result.do?sys_id={res['result_sys_id']}"
         if tracker["state"].startswith("still"):
             entry["note"] = ("Still running. If the test has UI steps it needs a client test runner: open "
-                             f"{c.instance.url}/atf_test_runner.do in a browser logged in to the instance.")
+                             "runner_url in the browser (Claude in Chrome or the user), logged in to the "
+                             "instance, then call run_atf again or check ui_url.")
+            entry["runner_url"] = f"{c.instance.url}/atf_test_runner.do?sysparm_nostack=true"
         results.append(entry)
     passed = sum(r["status"] == "success" for r in results)
     return {**({"suite": plan["suite"]} if plan.get("suite") else {}),

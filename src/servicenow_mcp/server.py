@@ -22,7 +22,16 @@ mcp = MCPServer(
         "Every tool takes an optional `instance` (name from list_instances); omitted means the "
         "current default. Queries use ServiceNow encoded query syntax (e.g. 'active=true^nameLIKEfoo'). "
         "Before writing to a table you have not used, call describe_table to get real field names. "
-        "Use run_script for anything the REST tools cannot do (GlideRecord, gs.*, GlideAggregate)."
+        "Use run_script for anything the REST tools cannot do (GlideRecord, gs.*, GlideAggregate).\n\n"
+        "Browser use (Claude in Chrome) - keep it rare: these tools are faster and more reliable for "
+        "data, schema, scripts, logs, ACLs, flows, emails and ATF. Open the browser only when the "
+        "answer depends on what the UI renders or does on the client: form layout, UI policies, client "
+        "scripts, UI action visibility, Service Portal / Workspace pages, the Flow Designer canvas, ATF "
+        "tests with UI steps (client test runner), or when the user asks to see something. Then get the "
+        "exact URL with ui_link (or a ui_url from a tool result), open one tab, check that one thing, "
+        "report, and stop - don't click around exploring. Verify data changes through these tools, not "
+        "by reading pages. The browser must already be logged in to the instance: if a login page "
+        "appears, ask the user to log in; never type credentials."
     ),
 )
 
@@ -484,6 +493,50 @@ async def run_atf(test: str | None = None, suite: str | None = None, wait_second
     results. Tests with UI steps need a client test runner open in a browser."""
     c = await _client(instance)
     return await debugtools.run_atf(c, test, suite, wait_seconds)
+
+
+UI_PATHS = {
+    "home": "/now/nav/ui/home",
+    "atf_runner": "/atf_test_runner.do?sysparm_nostack=true",
+    "scripts_background": "/sys.scripts.do",
+    "update_sets": "/sys_update_set_list.do?sysparm_query=state%3Din%20progress",
+    "system_logs": "/syslog_list.do?sysparm_query=ORDERBYDESCsys_created_on",
+}
+
+
+@mcp.tool()
+async def ui_link(kind: Literal["form", "list", "new", "flow", "flow_execution", "page"] = "form",
+                  table: str | None = None, sys_id: str | None = None, query: str | None = None,
+                  view: str | None = None, page: str | None = None,
+                  instance: str | None = None) -> dict:
+    """Exact URL of an instance page, for opening in the browser (Claude in Chrome) or giving to
+    the user. form: table+sys_id; list: table (+query); new: table; flow: sys_id of the flow
+    (sys_hub_flow); flow_execution: sys_id of the flow context; page: one of home, atf_runner,
+    scripts_background, update_sets, system_logs, or a raw path like '/sp'."""
+    from urllib.parse import quote
+    c = await _client(instance)
+    base = c.instance.url
+    v = f"&sysparm_view={quote(view)}" if view else ""
+    if kind in ("form", "list", "new") and not table:
+        raise ServiceNowError(f"`table` is required for kind='{kind}'")
+    if kind == "form":
+        if not sys_id:
+            raise ServiceNowError("`sys_id` is required for a form; use kind='new' for a new record")
+        path = f"/{table}.do?sys_id={sys_id}{v}"
+    elif kind == "new":
+        path = f"/{table}.do?sys_id=-1{v}"
+    elif kind == "list":
+        path = f"/{table}_list.do" + (f"?sysparm_query={quote(query)}" if query else "") + (v.replace("&", "?", 1) if v and not query else v)
+    elif kind == "flow":
+        path = f"/$flow-designer.do?sysparm_nostack=true#/flow-designer/{sys_id}"
+    elif kind == "flow_execution":
+        path = f"/now/workflow-studio/builder?tableName=sys_flow_context&builderId=flow-execution&sysId={sys_id}"
+    else:
+        path = UI_PATHS.get(page or "home", page or "/")
+        if not path.startswith("/"):
+            path = "/" + path
+    return {"url": base + path, "instance": c.instance.name,
+            "note": "Browser must be logged in to this instance; if a login page shows, ask the user to log in."}
 
 
 # ------------------------------------------------------------- update sets

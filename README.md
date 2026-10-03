@@ -93,6 +93,7 @@ developer portal) — it logs `HIBERNATING` instead. Check the Developer Program
 | Update sets | `list_update_sets`, `set_current_update_set` (also switches current application), `get_update_set_changes` |
 | Update set migration | `migrate_update_set` (export → import → preview, optional commit), `resolve_preview_problems` (accept / skip), `commit_update_set` |
 | Cross-instance | `compare_records` (diff dev vs test), `copy_records` (same sys_id, dry run first) |
+| Browser hand-off | `ui_link` (exact URL of a form, list, new record, flow, flow execution, ATF runner...; results of the debugging tools also carry `ui_url`) |
 | Escape hatch | `rest_request` (any REST endpoint) |
 
 ## Notes
@@ -112,4 +113,7 @@ developer portal) — it logs `HIBERNATING` instead. Check the Developer Program
 - `flow_executions` shows step-level detail only if flow reporting is on
   (`com.snc.process_flow.reporting.level`); `run_atf` needs `sn_atf.runner.enabled=true`, and tests with
   UI steps need a client test runner open in a browser.
+- Browser use (Claude in Chrome) is kept to what only the UI can show: the server's instructions tell
+  the assistant to use the API tools first, open exact URLs from `ui_link`, check one thing and stop,
+  and ask the user to log in instead of typing credentials.
 - Hibernating PDIs are detected and reported; wake them at developer.servicenow.com.
