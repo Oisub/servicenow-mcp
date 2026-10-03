@@ -118,6 +118,18 @@ def remove_instance(name: str) -> None:
             pass
 
 
+def set_basic(name: str) -> None:
+    raw = _load_raw()
+    if name not in raw.get("instances", {}):
+        raise ConfigError(f"Unknown instance '{name}'")
+    raw["instances"][name].update(auth="basic", client_id="")
+    _save_raw(raw)
+    try:
+        keyring.delete_password(KEYRING_SERVICE, _secret_key(name))
+    except keyring.errors.PasswordDeleteError:
+        pass
+
+
 def set_oauth(name: str, client_id: str, client_secret: str) -> None:
     raw = _load_raw()
     if name not in raw.get("instances", {}):

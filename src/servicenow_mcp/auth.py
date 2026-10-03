@@ -1,9 +1,9 @@
-"""Choose how REST calls authenticate, setting up OAuth when the instance restricts Basic auth.
+"""Choose how REST calls authenticate. OAuth is preferred; Basic auth is the fallback.
 
-Since 2025-2026 ServiceNow restricts Basic auth for APIs to users with the
-`snc_basic_auth_api_access` role (glide.authenticate.basic_auth.restriction.*), while UI login
-keeps working. In that case we register an OAuth client on the instance through the UI session
-and switch the instance to the OAuth password grant. No instance settings are changed.
+ServiceNow restricts Basic auth for APIs to users with the `snc_basic_auth_api_access` role
+(glide.authenticate.basic_auth.restriction.*) on newer instances, while UI login keeps working.
+We register an OAuth client on the instance through the UI session and use the OAuth password
+grant. No instance settings or roles are changed.
 """
 
 from __future__ import annotations
@@ -61,41 +61,58 @@ gs.print('MCPOAUTH client_id=' + e.client_id);""")
     return client_id
 
 
-async def ensure_api_auth(name: str) -> dict:
-    """Verify REST access for an instance and switch it to OAuth if Basic auth is restricted."""
-    instances, _ = config.load_instances()
-    inst = instances[name]
-    if inst.auth == "oauth":
-        try:
-            c = SNClient(inst)
-            await c.table_get("sys_user", sysparm_limit=1, sysparm_fields="sys_id")
-            await c.close()
-            return {"auth": "oauth", "rest_ok": True}
-        except (ServiceNowError, config.ConfigError):
-            pass  # client removed or secret lost: provision again below
-    else:
-        status = await _basic_rest_ok(inst)
-        if status == 200:
-            return {"auth": "basic", "rest_ok": True}
-        if status != 401:
-            return {"auth": "basic", "rest_ok": False, "error": f"REST returned HTTP {status}"}
-
-    # Basic REST rejected. If the UI login works, the password is right and Basic auth is restricted.
-    probe = SNClient(inst)
-    try:
-        await probe.run_background_script("gs.print('ok')")
-    except ServiceNowError:
-        return {"auth": inst.auth, "rest_ok": False,
-                "error": "Login failed: wrong username/password, or the account is locked."}
-    finally:
-        await probe.close()
-
-    await provision_oauth(inst)
-    inst = config.load_instances()[0][name]
+async def _rest_ok(inst: config.Instance) -> str | None:
+    """None if a REST call works with the instance's current auth, else the error text."""
     c = SNClient(inst)
     try:
         await c.table_get("sys_user", sysparm_limit=1, sysparm_fields="sys_id")
+        return None
+    except (ServiceNowError, config.ConfigError) as e:
+        return str(e)
     finally:
         await c.close()
-    return {"auth": "oauth", "rest_ok": True, "oauth_client_registered": OAUTH_APP_NAME,
-            "note": "Basic auth is restricted on this instance; switched to OAuth automatically."}
+
+
+async def ensure_api_auth(name: str) -> dict:
+    """Make REST access work for an instance, preferring OAuth.
+
+    OAuth (password grant with a registered client) is the default because ServiceNow is phasing
+    out Basic auth for APIs. Basic auth is used only when OAuth cannot be set up, e.g. the UI login
+    is unavailable (SSO-only) or the password grant is disabled on the instance.
+    """
+    inst = config.load_instances()[0][name]
+    if inst.auth == "oauth" and await _rest_ok(inst) is None:
+        return {"auth": "oauth", "rest_ok": True}
+
+    # Registering the OAuth client needs a UI session; this also proves the password is right.
+    probe = SNClient(inst)
+    try:
+        await probe.run_background_script("gs.print('ok')")
+        ui_ok, ui_error = True, ""
+    except ServiceNowError as e:
+        ui_ok, ui_error = False, str(e)
+    finally:
+        await probe.close()
+
+    oauth_error = "UI login failed, so the OAuth client could not be registered"
+    if ui_ok:
+        try:
+            await provision_oauth(inst)
+            oauth_error = await _rest_ok(config.load_instances()[0][name])
+        except (ServiceNowError, config.ConfigError) as e:
+            oauth_error = str(e)
+        if oauth_error is None:
+            return {"auth": "oauth", "rest_ok": True, "oauth_client": OAUTH_APP_NAME}
+        config.set_basic(name)  # OAuth did not work: fall back below
+
+    basic = config.load_instances()[0][name]
+    status = await _basic_rest_ok(basic)
+    if status == 200:
+        return {"auth": "basic", "rest_ok": True,
+                "note": f"OAuth unavailable, using Basic auth. Reason: {oauth_error}"}
+    if not ui_ok:
+        return {"auth": "basic", "rest_ok": False,
+                "error": f"Login failed: wrong username/password or account locked. ({ui_error})"}
+    return {"auth": "basic", "rest_ok": False,
+            "error": f"OAuth failed ({oauth_error}) and Basic auth is rejected (HTTP {status}). "
+                     "Enable the OAuth password grant or grant the snc_basic_auth_api_access role."}

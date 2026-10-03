@@ -7,6 +7,7 @@
   servicenow-mcp set-default NAME
   servicenow-mcp list
   servicenow-mcp test [NAME]                        check REST and background-script access
+  servicenow-mcp setup-auth [NAME]                  switch to OAuth (fallback: Basic) and verify
 """
 
 from __future__ import annotations
@@ -62,6 +63,7 @@ def main() -> None:
     sub.add_parser("set-default").add_argument("name")
     sub.add_parser("list")
     sub.add_parser("test").add_argument("name", nargs="?")
+    sub.add_parser("setup-auth").add_argument("name", nargs="?")
     args = p.parse_args()
 
     if args.cmd == "add-instance":
@@ -78,6 +80,11 @@ def main() -> None:
         instances, default = config.load_instances()
         for i in instances.values():
             print(f"{'*' if i.name == default else ' '} {i.name:20} {i.url:45} {i.username:12} {i.auth:6} {i.description}")
+    elif args.cmd == "setup-auth":
+        from .auth import ensure_api_auth
+        instances, _ = config.load_instances()
+        for n in [args.name] if args.name else list(instances):
+            print(f"{n}: {asyncio.run(ensure_api_auth(n))}")
     elif args.cmd == "test":
         sys.exit(asyncio.run(_test(args.name)))
 
