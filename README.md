@@ -3,10 +3,36 @@
 ServiceNow MCP server for Claude Code, focused on development, debugging and keeping
 multiple instances (dev / test / ...) in sync.
 
+> [!WARNING]
+> **Security.** This server acts with the full rights of the account you give it — with an admin
+> account that includes running arbitrary server-side scripts (`run_script`), deleting records and
+> committing update sets. Anything the AI assistant decides to do, it can do on your instance.
+> - Use it against **personal developer / sub-production instances**. Do not point it at production.
+> - Prefer a dedicated account with only the roles you need; review write actions before approving them.
+> - Passwords are kept in the OS credential store, never in files or in the conversation, but anyone
+>   who can run code as your OS user can read them.
+> - Provided as-is, without warranty. You are responsible for what it does on your instances.
+
+## Install
+
+Requires [uv](https://docs.astral.sh/uv/) and Python 3.11+.
+
+```powershell
+git clone https://github.com/Oisub/servicenow-mcp
+cd servicenow-mcp
+uv sync
+claude mcp add -s user servicenow -- "$PWD\.venv\Scripts\servicenow-mcp.exe"   # Windows
+# macOS / Linux: claude mcp add -s user servicenow -- "$PWD/.venv/bin/servicenow-mcp"
+```
+
+On first use (the first ServiceNow tool call with no instance configured) a dialog opens to
+enter the instance URL, username and password. The login is verified before saving.
+
 ## Instances
 
 Instance list: `~/.servicenow-mcp/instances.json` (no secrets).
-Passwords: Windows Credential Manager (service `servicenow-mcp`), or env `SN_PASSWORD_<NAME>`.
+Passwords: OS credential store via keyring (Windows Credential Manager, macOS Keychain, ...;
+service `servicenow-mcp`), or env `SN_PASSWORD_<NAME>`.
 
 ```powershell
 cd servicenow-mcp

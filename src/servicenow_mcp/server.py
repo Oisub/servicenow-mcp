@@ -40,16 +40,51 @@ SYSTEM_FIELDS = {
 
 # ---------------------------------------------------------------- helpers
 
-def _client(instance: str | None) -> SNClient:
+async def _open_instance_dialog(name: str = "") -> dict:
+    """Show the add-instance dialog on the user's desktop and wait for it (max 10 minutes)."""
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, "-m", "servicenow_mcp.gui", name,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(), timeout=600)
+    except asyncio.TimeoutError:
+        proc.kill()
+        return {"saved": False, "reason": "Dialog timed out after 10 minutes"}
+    try:
+        result = json.loads(out.decode("utf-8").strip().splitlines()[-1])
+    except (IndexError, ValueError):
+        raise ServiceNowError(f"Dialog failed: {err.decode('utf-8', 'replace')[-500:]}")
+    if result.get("saved"):
+        _clients.pop(result["name"], None)
+    else:
+        result["reason"] = "User cancelled"
+    return result
+
+
+async def _client(instance: str | None) -> SNClient:
     instances, default = load_instances()
+    if not instances:
+        # First use: ask for an instance right away instead of failing.
+        if not (await _open_instance_dialog()).get("saved"):
+            raise ConfigError("No ServiceNow instance configured and the setup dialog was cancelled. "
+                              "Call add_instance when the user is ready.")
+        instances, default = load_instances()
     name = instance or _session_default or default
     if not name:
-        raise ConfigError("No instance configured. Run: servicenow-mcp add-instance <name> <url> <user>")
+        raise ConfigError(f"No default instance. Pass `instance` (one of: {', '.join(instances)}).")
     if name not in instances:
         raise ConfigError(f"Unknown instance '{name}'. Known: {', '.join(instances) or '(none)'}")
     cached = _clients.get(name)
     if cached is None or cached.instance != instances[name]:
-        cached = SNClient(instances[name])
+        try:
+            cached = SNClient(instances[name])
+        except ConfigError:
+            # Registered but no password stored on this machine: ask for it.
+            if not (await _open_instance_dialog(name)).get("saved"):
+                raise
+            instances, _ = load_instances()
+            cached = SNClient(instances[name])
         _clients[name] = cached
     return cached
 
@@ -121,24 +156,7 @@ async def add_instance(name: str = "") -> dict:
     The user types URL, username and password there; the password goes straight to the OS
     credential store and is never returned. Call this whenever the user wants to add an
     instance; never ask for passwords in chat. Waits up to 10 minutes for the user."""
-    proc = await asyncio.create_subprocess_exec(
-        sys.executable, "-m", "servicenow_mcp.gui", name,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-    )
-    try:
-        out, err = await asyncio.wait_for(proc.communicate(), timeout=600)
-    except asyncio.TimeoutError:
-        proc.kill()
-        return {"saved": False, "reason": "Dialog timed out after 10 minutes"}
-    try:
-        result = json.loads(out.decode("utf-8").strip().splitlines()[-1])
-    except (IndexError, ValueError):
-        raise ServiceNowError(f"Dialog failed: {err.decode('utf-8', 'replace')[-500:]}")
-    if result.get("saved"):
-        _clients.pop(result["name"], None)
-    else:
-        result["reason"] = "User cancelled"
-    return result
+    return await _open_instance_dialog(name)
 
 
 @mcp.tool()
@@ -164,7 +182,7 @@ async def describe_table(table: str, include_inherited: bool = True,
                          instance: str | None = None) -> dict:
     """Show a table's label, inheritance chain and fields (type, reference target, mandatory, length,
     default). Use before creating/updating records or writing GlideRecord code."""
-    c = _client(instance)
+    c = await _client(instance)
     chain: list[dict] = []
     name = table
     while name:
@@ -221,7 +239,7 @@ async def query_records(table: str, query: str = "", fields: list[str] | None = 
     """Query any table with an encoded query. `display`: 'both' returns {value, display} for
     reference/choice fields, 'value' raw values only, 'display' display values only.
     Specify `fields` whenever possible to keep output small."""
-    c = _client(instance)
+    c = await _client(instance)
     q = query
     if order_by:
         q = f"{q}^{'ORDERBYDESC' if descending else 'ORDERBY'}{order_by}".lstrip("^")
@@ -239,7 +257,7 @@ async def query_records(table: str, query: str = "", fields: list[str] | None = 
 async def get_record(table: str, sys_id: str, fields: list[str] | None = None,
                      display: Display = "both", instance: str | None = None) -> dict:
     """Fetch a single record by sys_id."""
-    c = _client(instance)
+    c = await _client(instance)
     data = await c.request("GET", f"/api/now/table/{table}/{sys_id}", params={
         "sysparm_fields": _fields(fields) or "",
         "sysparm_display_value": _display_param(display),
@@ -254,7 +272,7 @@ async def create_record(table: str, data: dict[str, Any], instance: str | None =
     """Create a record. Use real field names (see describe_table); reference fields take sys_ids.
     Include `sys_id` in data to force a specific sys_id (useful to keep instances aligned).
     The change is captured in your current update set if the table is tracked."""
-    c = _client(instance)
+    c = await _client(instance)
     res = await c.request("POST", f"/api/now/table/{table}", json=data,
                           params={"sysparm_exclude_reference_link": "true"})
     rec = res["result"]
@@ -266,7 +284,7 @@ async def create_record(table: str, data: dict[str, Any], instance: str | None =
 async def update_record(table: str, sys_id: str, data: dict[str, Any],
                         instance: str | None = None) -> dict:
     """Update fields on a record (only the given fields change)."""
-    c = _client(instance)
+    c = await _client(instance)
     res = await c.request("PATCH", f"/api/now/table/{table}/{sys_id}", json=data,
                           params={"sysparm_exclude_reference_link": "true",
                                   "sysparm_fields": ",".join(["sys_id", *data.keys()])})
@@ -276,7 +294,7 @@ async def update_record(table: str, sys_id: str, data: dict[str, Any],
 @mcp.tool()
 async def delete_record(table: str, sys_id: str, instance: str | None = None) -> str:
     """Delete a record by sys_id. Irreversible on the instance (unless captured in an update set)."""
-    c = _client(instance)
+    c = await _client(instance)
     await c.request("DELETE", f"/api/now/table/{table}/{sys_id}")
     return f"Deleted {table}/{sys_id} on {c.instance.name}"
 
@@ -287,7 +305,7 @@ async def aggregate(table: str, query: str = "", group_by: list[str] | None = No
                     min: list[str] | None = None, max: list[str] | None = None,
                     instance: str | None = None) -> Any:
     """Count / group / avg / sum / min / max over a table (Aggregate API)."""
-    c = _client(instance)
+    c = await _client(instance)
     params = {"sysparm_query": query, "sysparm_count": str(count).lower(),
               "sysparm_display_value": "true"}
     for key, val in (("sysparm_group_by", group_by), ("sysparm_avg_fields", avg),
@@ -306,7 +324,7 @@ async def run_script(script: str, scope: str = "global", instance: str | None = 
     """Run a server-side script in Scripts - Background and return its output (gs.print / gs.info
     lines, errors). Full Glide API available. Changes to tracked records go into the current
     update set. Requires admin. `scope` is the application scope name, e.g. 'x_acme_app'."""
-    c = _client(instance)
+    c = await _client(instance)
     out = await c.run_background_script(script, await _scope_sys_id(c, scope))
     return out or "(no output)"
 
@@ -347,7 +365,7 @@ async def search_scripts(text: str, tables: list[str] | None = None, limit_per_t
     """Find code containing `text` across script tables (script includes, business rules,
     client scripts, UI actions/policies/pages, scripted REST, scheduled jobs, fix scripts,
     transform maps, widgets...). Returns matching lines with line numbers."""
-    c = _client(instance)
+    c = await _client(instance)
     targets = {t: SCRIPT_TABLES.get(t, ["script"]) for t in (tables or SCRIPT_TABLES)}
 
     async def search(table: str, cols: list[str]) -> list[dict]:
@@ -385,7 +403,7 @@ async def get_logs(minutes: int = 15, level: Literal["error", "warning", "info",
                    source: str | None = None, contains: str | None = None, limit: int = 50,
                    instance: str | None = None) -> list[dict]:
     """Read recent system logs (syslog), newest first. `level` is the minimum severity."""
-    c = _client(instance)
+    c = await _client(instance)
     q = [f"sys_created_on>=javascript:gs.minutesAgoStart({minutes})"]
     if level:
         q.append("level>=" + {"debug": "-1", "info": "0", "warning": "1", "error": "2"}[level])
@@ -420,7 +438,7 @@ async def _current_update_set(c: SNClient) -> dict:
 async def list_update_sets(state: str = "in progress", limit: int = 30,
                            instance: str | None = None) -> dict:
     """List update sets (default: in progress) and show your current application + update set."""
-    c = _client(instance)
+    c = await _client(instance)
     current = await _current_update_set(c)
     q = (f"state={state}^" if state else "") + "ORDERBYDESCsys_updated_on"
     rows = await c.table_get("sys_update_set", sysparm_query=q, sysparm_limit=limit,
@@ -439,7 +457,7 @@ async def set_current_update_set(name_or_sys_id: str, create_if_missing: bool = 
     set's application, so that subsequent REST/script changes are captured in it.
     With create_if_missing, creates it in `application` (scope name, e.g. 'global' or
     'x_acme_app'; default: your current application)."""
-    c = _client(instance)
+    c = await _client(instance)
     rows = await c.table_get(
         "sys_update_set",
         sysparm_query=f"sys_id={name_or_sys_id}^ORname={name_or_sys_id}^state=in progress",
@@ -498,7 +516,7 @@ async def set_current_update_set(name_or_sys_id: str, create_if_missing: bool = 
 async def get_update_set_changes(update_set: str, limit: int = 200,
                                  instance: str | None = None) -> dict:
     """List the customer updates (sys_update_xml) captured in an update set (name or sys_id)."""
-    c = _client(instance)
+    c = await _client(instance)
     sets = await c.table_get("sys_update_set",
                              sysparm_query=f"sys_id={update_set}^ORname={update_set}",
                              sysparm_fields="sys_id,name,state", sysparm_limit=1)
@@ -519,7 +537,7 @@ async def migrate_update_set(update_set: str, source: str, target: str, commit: 
     With commit=true it also commits, but only if preview found no unresolved problems.
     Otherwise review the problems, then use resolve_preview_problems and commit_update_set.
     Source should normally be 'complete'. Batch (parent/child) update sets are not supported."""
-    src, tgt = _client(source), _client(target)
+    src, tgt = await _client(source), await _client(target)
     us = await updateset.find_update_set(src, update_set)
     warnings = []
     if us["state"] != "complete":
@@ -549,7 +567,7 @@ async def resolve_preview_problems(remote_update_set: str, action: Literal["acce
     """Resolve preview problems of a retrieved update set, like the UI buttons:
     'accept' = Accept remote update (apply it anyway), 'skip' = Skip remote update (don't apply).
     Without problem_ids, applies to all unresolved problems. Returns the remaining problems."""
-    c = _client(instance)
+    c = await _client(instance)
     done = await updateset.resolve(c, remote_update_set, action, problem_ids)
     probs = await updateset.problems(c, remote_update_set)
     return {**done, "problems": probs,
@@ -561,7 +579,7 @@ async def commit_update_set(remote_update_set: str, wait_seconds: int = 300,
                             instance: str | None = None) -> dict:
     """Commit a previewed retrieved update set (sys_remote_update_set sys_id) on the instance.
     Refuses while preview problems are unresolved."""
-    c = _client(instance)
+    c = await _client(instance)
     return await updateset.commit(c, remote_update_set, wait_seconds)
 
 
@@ -580,7 +598,7 @@ async def compare_records(table: str, query: str, source: str, target: str,
     """Diff records between two instances (e.g. dev vs test). Matches by `match_on` (sys_id by
     default; use e.g. 'name' if the records were created separately). Reports records missing on
     either side and field-level differences. System audit fields are ignored."""
-    src, tgt = _client(source), _client(target)
+    src, tgt = await _client(source), await _client(target)
     field_str = _fields(fields)
     if field_str:
         field_str = ",".join({*field_str.split(","), "sys_id", match_on})
@@ -620,7 +638,7 @@ async def copy_records(table: str, query: str, source: str, target: str,
     update if different). Defaults to dry_run=true: review the plan, then call again with
     dry_run=false. Referenced records (e.g. groups, users) must already exist on the target.
     Writes on the target are captured in the target user's current update set if tracked."""
-    src, tgt = _client(source), _client(target)
+    src, tgt = await _client(source), await _client(target)
     src_rows = await src.table_get_all(table, query, _fields(fields), max_records=max_records + 1)
     if len(src_rows) > max_records:
         raise ServiceNowError(f"Query matches more than {max_records} records; narrow it or raise max_records.")
@@ -679,7 +697,7 @@ async def rest_request(method: Literal["GET", "POST", "PUT", "PATCH", "DELETE"],
                        instance: str | None = None) -> Any:
     """Call any REST endpoint on the instance (path like '/api/now/attachment' or a scripted REST
     API '/api/x_scope/my_api/...'). Use when no dedicated tool fits."""
-    c = _client(instance)
+    c = await _client(instance)
     if not path.startswith("/"):
         path = "/" + path
     return await c.request(method, path, params=params, json=body)
