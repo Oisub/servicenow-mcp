@@ -1,6 +1,7 @@
 """HTTP client for one ServiceNow instance.
 
-- REST calls use basic auth with retries on transient failures.
+- REST calls use basic auth, or an OAuth bearer token (password grant) for instances that
+  restrict Basic auth, with retries on transient failures.
 - UI-only features (background scripts) use a separate form-login session.
 - Every failure is turned into a ServiceNowError with a message that says what to do.
 """
@@ -10,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import html
 import re
+import time
 from typing import Any
 
 import httpx
@@ -34,8 +36,9 @@ def _explain(resp: httpx.Response, instance: Instance) -> str:
         detail = resp.text[:300]
     hint = {
         400: "Bad request: check the encoded query, field names and value formats.",
-        401: f"Authentication failed for '{instance.username}'. Check the stored password "
-             f"(servicenow-mcp add-instance {instance.name} ...) or whether the account is locked.",
+        401: f"Authentication failed for '{instance.username}'. Check the password or whether the "
+             "account is locked; if the instance restricts Basic auth, run add_instance again "
+             "(it sets up OAuth automatically).",
         403: "Forbidden by ACL or the user lacks the required role for this table/operation.",
         404: "Not found: the table, record or endpoint does not exist on this instance.",
     }.get(resp.status_code, "")
@@ -50,34 +53,71 @@ def _looks_hibernating(resp: httpx.Response) -> bool:
 class SNClient:
     def __init__(self, instance: Instance):
         self.instance = instance
+        self._oauth = instance.auth == "oauth"
         self._http = httpx.AsyncClient(
             base_url=instance.url,
-            auth=(instance.username, instance.password),
+            auth=None if self._oauth else (instance.username, instance.password),
             timeout=TIMEOUT,
             headers={"Accept": "application/json", "Content-Type": "application/json"},
         )
         self._ui: httpx.AsyncClient | None = None
         self._ui_lock = asyncio.Lock()
+        self._token: str | None = None
+        self._token_expires = 0.0
+        self._token_lock = asyncio.Lock()
 
     async def close(self) -> None:
         await self._http.aclose()
         if self._ui:
             await self._ui.aclose()
 
+    # ----------------------------------------------------------------- OAuth
+
+    async def _bearer(self, force: bool = False) -> str:
+        async with self._token_lock:
+            if self._token and not force and time.monotonic() < self._token_expires:
+                return self._token
+            resp = await self._http.post("/oauth_token.do", data={
+                "grant_type": "password",
+                "client_id": self.instance.client_id,
+                "client_secret": self.instance.client_secret,
+                "username": self.instance.username,
+                "password": self.instance.password,
+            }, headers={"Content-Type": "application/x-www-form-urlencoded"})
+            try:
+                body = resp.json()
+            except ValueError:
+                body = {}
+            if resp.status_code != 200 or "access_token" not in body:
+                raise ServiceNowError(
+                    f"[{self.instance.name}] OAuth token request failed (HTTP {resp.status_code}: "
+                    f"{body.get('error_description') or body.get('error') or resp.text[:150]}). "
+                    "If the password changed or the OAuth client was removed, run add_instance again."
+                )
+            self._token = body["access_token"]
+            self._token_expires = time.monotonic() + int(body.get("expires_in", 1800)) - 60
+            return self._token
+
     # ------------------------------------------------------------------ REST
 
     async def request(self, method: str, path: str, *, params: dict | None = None,
                       json: Any = None) -> Any:
         last_exc: Exception | None = None
+        renewed = False
         for attempt in range(MAX_RETRIES):
             # Stateless REST: a reused session would keep a stale current update set / application
             # after they are switched, so changes would be captured in the wrong update set.
             self._http.cookies.clear()
+            headers = {"Authorization": f"Bearer {await self._bearer()}"} if self._oauth else None
             try:
-                resp = await self._http.request(method, path, params=params, json=json)
+                resp = await self._http.request(method, path, params=params, json=json, headers=headers)
             except (httpx.ConnectError, httpx.ReadTimeout, httpx.RemoteProtocolError) as e:
                 last_exc = e
                 await asyncio.sleep(2 ** attempt)
+                continue
+            if resp.status_code == 401 and self._oauth and not renewed:
+                renewed = True  # token revoked or expired early: get a fresh one once
+                await self._bearer(force=True)
                 continue
             if resp.status_code in RETRY_STATUS and attempt < MAX_RETRIES - 1:
                 await asyncio.sleep(float(resp.headers.get("Retry-After", 2 ** attempt)))

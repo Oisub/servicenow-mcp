@@ -77,7 +77,7 @@ def main() -> None:
     elif args.cmd == "list":
         instances, default = config.load_instances()
         for i in instances.values():
-            print(f"{'*' if i.name == default else ' '} {i.name:20} {i.url:45} {i.username}  {i.description}")
+            print(f"{'*' if i.name == default else ' '} {i.name:20} {i.url:45} {i.username:12} {i.auth:6} {i.description}")
     elif args.cmd == "test":
         sys.exit(asyncio.run(_test(args.name)))
 

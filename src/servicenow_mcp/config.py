@@ -3,6 +3,9 @@
 Instances live in ~/.servicenow-mcp/instances.json (no secrets).
 Passwords live in the OS credential store (Windows Credential Manager) via keyring,
 with an environment-variable fallback: SN_PASSWORD_<NAME> (name upper-cased, '-' -> '_').
+
+`auth` is "basic" or "oauth". OAuth uses the password grant with an OAuth client registered on
+the instance; its client_id is stored here, its secret in the credential store.
 """
 
 from __future__ import annotations
@@ -29,6 +32,8 @@ class Instance:
     url: str
     username: str
     description: str = ""
+    auth: str = "basic"
+    client_id: str = ""
 
     @property
     def password(self) -> str:
@@ -40,6 +45,17 @@ class Instance:
                 f"Run: servicenow-mcp add-instance {self.name} {self.url} {self.username}"
             )
         return pw
+
+    @property
+    def client_secret(self) -> str:
+        secret = keyring.get_password(KEYRING_SERVICE, _secret_key(self.name))
+        if not secret:
+            raise ConfigError(f"No OAuth client secret stored for '{self.name}'. Run add_instance again.")
+        return secret
+
+
+def _secret_key(name: str) -> str:
+    return f"{name}:oauth_client_secret"
 
 
 def _load_raw() -> dict:
@@ -63,6 +79,8 @@ def load_instances() -> tuple[dict[str, Instance], str | None]:
             url=cfg["url"].rstrip("/"),
             username=cfg["username"],
             description=cfg.get("description", ""),
+            auth=cfg.get("auth", "basic"),
+            client_id=cfg.get("client_id", ""),
         )
         for name, cfg in raw.get("instances", {}).items()
     }
@@ -75,9 +93,11 @@ def save_instance(name: str, url: str, username: str, password: str | None,
     if not url.startswith("http"):
         url = f"https://{url}.service-now.com" if "." not in url else f"https://{url}"
     raw = _load_raw()
-    raw.setdefault("instances", {})[name] = {
-        "url": url, "username": username, "description": description,
-    }
+    old = raw.setdefault("instances", {}).get(name, {})
+    entry = {"url": url, "username": username, "description": description}
+    if old.get("auth") == "oauth" and old.get("url") == url:
+        entry.update(auth="oauth", client_id=old.get("client_id", ""))  # keep the registered client
+    raw["instances"][name] = entry
     if make_default or not raw.get("default"):
         raw["default"] = name
     _save_raw(raw)
@@ -91,10 +111,20 @@ def remove_instance(name: str) -> None:
     if raw.get("default") == name:
         raw["default"] = next(iter(raw["instances"]), None)
     _save_raw(raw)
-    try:
-        keyring.delete_password(KEYRING_SERVICE, name)
-    except keyring.errors.PasswordDeleteError:
-        pass
+    for key in (name, _secret_key(name)):
+        try:
+            keyring.delete_password(KEYRING_SERVICE, key)
+        except keyring.errors.PasswordDeleteError:
+            pass
+
+
+def set_oauth(name: str, client_id: str, client_secret: str) -> None:
+    raw = _load_raw()
+    if name not in raw.get("instances", {}):
+        raise ConfigError(f"Unknown instance '{name}'")
+    raw["instances"][name].update(auth="oauth", client_id=client_id)
+    _save_raw(raw)
+    keyring.set_password(KEYRING_SERVICE, _secret_key(name), client_secret)
 
 
 def set_default(name: str) -> None:

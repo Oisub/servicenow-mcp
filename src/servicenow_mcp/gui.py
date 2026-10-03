@@ -20,6 +20,17 @@ def _normalize_url(url: str) -> str:
     return url
 
 
+def _ui_login_ok(url: str, username: str, password: str) -> bool:
+    """UI login still works on instances that restrict Basic auth for APIs."""
+    try:
+        with httpx.Client(base_url=url, timeout=30, follow_redirects=True) as ui:
+            ui.post("/login.do", data={"user_name": username, "user_password": password,
+                                       "sys_action": "sysverb_login"})
+            return "sysparm_ck" in ui.get("/sys.scripts.do").text
+    except httpx.HTTPError:
+        return False
+
+
 def _check_login(url: str, username: str, password: str) -> str | None:
     """Return None if the credentials work, else a readable error."""
     try:
@@ -29,6 +40,8 @@ def _check_login(url: str, username: str, password: str) -> str | None:
     except httpx.HTTPError as e:
         return f"无法连接 {url}\n{e}"
     if r.status_code == 401:
+        if _ui_login_ok(url, username, password):
+            return None  # password is right; Basic auth for APIs is restricted -> OAuth is set up after saving
         return "用户名或密码错误（HTTP 401）。"
     if "text/html" in r.headers.get("content-type", ""):
         return "实例返回了网页而不是数据，可能正在休眠或 URL 不对。"

@@ -12,7 +12,7 @@ from typing import Any, Literal
 from mcp.server.mcpserver import MCPServer
 
 from .client import ServiceNowError, SNClient
-from . import config, updateset
+from . import auth, config, updateset
 from .config import ConfigError, load_instances
 
 mcp = MCPServer(
@@ -156,7 +156,12 @@ async def add_instance(name: str = "") -> dict:
     The user types URL, username and password there; the password goes straight to the OS
     credential store and is never returned. Call this whenever the user wants to add an
     instance; never ask for passwords in chat. Waits up to 10 minutes for the user."""
-    return await _open_instance_dialog(name)
+    result = await _open_instance_dialog(name)
+    if result.get("saved"):
+        # Checks REST access and switches to OAuth if the instance restricts Basic auth.
+        result.update(await auth.ensure_api_auth(result["name"]))
+        _clients.pop(result["name"], None)
+    return result
 
 
 @mcp.tool()

@@ -47,6 +47,21 @@ Or just ask Claude to add an instance: the `add_instance` tool opens a desktop d
 (URL / username / password, login is verified before saving). The password never passes
 through the conversation. `remove_instance` removes one.
 
+### Authentication
+
+Newer instances restrict Basic auth for REST APIs to users with the `snc_basic_auth_api_access`
+role (`glide.authenticate.basic_auth.restriction.*`), while UI login keeps working. When adding an
+instance, the server detects this and switches to OAuth automatically:
+
+1. registers an OAuth client named `servicenow-mcp` on the instance (via the UI session; no
+   instance settings or roles are changed),
+2. stores its client secret in the OS credential store and deletes the script-execution-history
+   entry that contained it,
+3. uses the OAuth password grant (ROPC) for REST from then on, renewing tokens automatically.
+
+If ROPC is disabled on the instance (`glide.oauth.inbound.ropc.grant_type.disabled = true`), either
+enable it or give the user the `snc_basic_auth_api_access` role.
+
 New instances are picked up without restarting Claude Code. In a conversation, switch with
 `use_instance`, or pass `instance` to any tool.
 
