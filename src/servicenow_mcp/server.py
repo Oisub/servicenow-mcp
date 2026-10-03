@@ -12,7 +12,7 @@ from typing import Any, Literal
 from mcp.server.mcpserver import MCPServer
 
 from .client import ServiceNowError, SNClient
-from . import auth, config, updateset
+from . import auth, config, keepalive, updateset
 from .config import ConfigError, load_instances
 
 mcp = MCPServer(
@@ -162,6 +162,24 @@ async def add_instance(name: str = "") -> dict:
         result.update(await auth.ensure_api_auth(result["name"]))
         _clients.pop(result["name"], None)
     return result
+
+
+@mcp.tool()
+async def keepalive_status(run_now: bool = False) -> dict:
+    """Show the PDI keep-alive schedule and recent results (ok / HIBERNATING / LOGIN FAILED).
+    run_now=true pings every PDI immediately. Install/remove the schedule with the CLI:
+    `servicenow-mcp install-keepalive [--every MIN]` / `uninstall-keepalive`."""
+    info = keepalive.task_info()
+    schedule = None
+    if info:
+        fields = dict(line.split(":", 1) for line in info.splitlines() if ":" in line)
+        schedule = {k.strip(): v.strip() for k, v in fields.items()
+                    if any(w in k for w in ("Status", "Next Run", "状态", "下次运行"))} or info.strip()[:300]
+    ran = await keepalive.run_once() if run_now else None
+    return {"scheduled": bool(info), "schedule": schedule,
+            "pdi_instances": [i.name for i in keepalive.pdi_instances()],
+            **({"just_ran": ran} if ran else {}),
+            "recent": keepalive.recent(20)}
 
 
 @mcp.tool()

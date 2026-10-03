@@ -66,11 +66,26 @@ If OAuth cannot be set up (UI login unavailable, e.g. SSO-only, or ROPC disabled
 New instances are picked up without restarting Claude Code. In a conversation, switch with
 `use_instance`, or pass `instance` to any tool.
 
+### Keeping PDIs awake
+
+Personal developer instances (`devNNNN.service-now.com`) hibernate after a period without
+activity. The keep-alive logs in to each PDI through the UI and opens a page, like a developer would.
+
+```powershell
+uv run servicenow-mcp keepalive                    # once, now
+uv run servicenow-mcp install-keepalive --every 60 # Windows Task Scheduler, no console window
+uv run servicenow-mcp uninstall-keepalive
+```
+
+Results go to `~/.servicenow-mcp/keepalive.log`; the `keepalive_status` tool shows them. It only runs
+while the PC is on, and it cannot wake an instance that is already hibernating (that needs the
+developer portal) — it logs `HIBERNATING` instead. Check the Developer Program terms for your use.
+
 ## Tools
 
 | Area | Tools |
 |---|---|
-| Instances | `list_instances`, `use_instance`, `add_instance` (dialog), `remove_instance` |
+| Instances | `list_instances`, `use_instance`, `add_instance` (dialog), `remove_instance`, `keepalive_status` |
 | Schema | `describe_table` (fields incl. inherited, types, references) |
 | Records | `query_records`, `get_record`, `create_record`, `update_record`, `delete_record`, `aggregate` |
 | Dev / debug | `run_script` (Scripts - Background, any scope), `search_scripts` (code search across script tables), `get_logs` (syslog) |

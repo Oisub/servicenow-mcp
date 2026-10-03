@@ -8,6 +8,9 @@
   servicenow-mcp list
   servicenow-mcp test [NAME]                        check REST and background-script access
   servicenow-mcp setup-auth [NAME]                  switch to OAuth (fallback: Basic) and verify
+  servicenow-mcp keepalive [NAME ...]               log in to each PDI once so it doesn't hibernate
+  servicenow-mcp install-keepalive [--every MIN]    run keepalive from Task Scheduler (default 60)
+  servicenow-mcp uninstall-keepalive
 """
 
 from __future__ import annotations
@@ -64,6 +67,9 @@ def main() -> None:
     sub.add_parser("list")
     sub.add_parser("test").add_argument("name", nargs="?")
     sub.add_parser("setup-auth").add_argument("name", nargs="?")
+    sub.add_parser("keepalive").add_argument("names", nargs="*")
+    sub.add_parser("install-keepalive").add_argument("--every", type=int, default=60)
+    sub.add_parser("uninstall-keepalive")
     args = p.parse_args()
 
     if args.cmd == "add-instance":
@@ -80,6 +86,17 @@ def main() -> None:
         instances, default = config.load_instances()
         for i in instances.values():
             print(f"{'*' if i.name == default else ' '} {i.name:20} {i.url:45} {i.username:12} {i.auth:6} {i.description}")
+    elif args.cmd == "keepalive":
+        from . import keepalive
+        lines = asyncio.run(keepalive.run_once(args.names or None))
+        if sys.stdout:  # None under pythonw (scheduled run)
+            print("\n".join(lines))
+    elif args.cmd == "install-keepalive":
+        from . import keepalive
+        print(keepalive.install(args.every))
+    elif args.cmd == "uninstall-keepalive":
+        from . import keepalive
+        print(keepalive.uninstall())
     elif args.cmd == "setup-auth":
         from .auth import ensure_api_auth
         instances, _ = config.load_instances()
