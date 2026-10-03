@@ -12,7 +12,7 @@ from typing import Any, Literal
 from mcp.server.mcpserver import MCPServer
 
 from .client import ServiceNowError, SNClient
-from . import auth, config, debugtools, keepalive, updateset
+from . import auth, config, debugtools, keepalive, updateset, whereused
 from .config import ConfigError, load_instances
 
 mcp = MCPServer(
@@ -537,6 +537,33 @@ async def ui_link(kind: Literal["form", "list", "new", "flow", "flow_execution",
             path = "/" + path
     return {"url": base + path, "instance": c.instance.name,
             "note": "Browser must be logged in to this instance; if a login page shows, ask the user to log in."}
+
+
+@mcp.tool()
+async def where_used(name: str, kind: Literal["auto", "table", "field", "script"] = "auto",
+                     limit_per_source: int = 20, include_inactive: bool = False,
+                     instance: str | None = None) -> dict:
+    """Find everywhere `name` is referenced before you change or remove it: in code and conditions
+    (business rules, script includes, client scripts, UI actions/policies, ACLs, notifications, SLAs,
+    reference qualifiers, calculated fields...) and in metadata (dictionary fields that reference a
+    table, child tables). `name` is a table name, field name, script include name, property, etc.
+    Text matching is substring/case-insensitive - review for false positives. Impact analysis."""
+    c = await _client(instance)
+    return await whereused.where_used(c, name, kind, limit_per_source, include_inactive)
+
+
+@mcp.tool()
+async def change_history(since_hours: int = 72, application: str | None = None,
+                         updated_by: str | None = None, type_contains: str | None = None,
+                         target_contains: str | None = None, update_set: str | None = None,
+                         limit: int = 100, instance: str | None = None) -> dict:
+    """What changed on the instance (from sys_update_xml), newest first, with counts by type and
+    user. Filter by time window, application (scope name), user, record type (e.g. 'business rule',
+    'flow', 'acl'), target name (contains), or update set (name/sys_id). The recent-changes audit
+    trail - e.g. 'what did the team change in x_acme_app this week'."""
+    c = await _client(instance)
+    return await whereused.change_history(c, since_hours, application, updated_by, type_contains,
+                                          target_contains, update_set, limit)
 
 
 # ------------------------------------------------------------- update sets

@@ -144,7 +144,7 @@ class SNClient:
         params = {"sysparm_exclude_reference_link": "true",
                   **{k: v for k, v in params.items() if v is not None}}
         data = await self.request("GET", f"/api/now/table/{table}", params=params)
-        return data.get("result", [])
+        return (data or {}).get("result", [])
 
     async def table_get_all(self, table: str, query: str, fields: str | None,
                             page_size: int = 500, max_records: int = 5000) -> list[dict]:
