@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import mimetypes
 import re
 import sys
+from pathlib import Path
 from typing import Any, Literal
 
 from mcp.server.mcpserver import MCPServer
@@ -329,6 +331,27 @@ async def delete_record(table: str, sys_id: str, instance: str | None = None) ->
     c = await _client(instance)
     await c.request("DELETE", f"/api/now/table/{table}/{sys_id}")
     return f"Deleted {table}/{sys_id} on {c.instance.name}"
+
+
+@mcp.tool()
+async def upload_attachment(table: str, sys_id: str, file_path: str, file_name: str | None = None,
+                            content_type: str | None = None, instance: str | None = None) -> dict:
+    """Attach a local file (any type: xlsx, pdf, png...) to a record. `file_path` is a path on this
+    machine; `file_name` defaults to its basename, `content_type` is guessed from the extension.
+    Remove an attachment with delete_record(table='sys_attachment', sys_id=...)."""
+    path = Path(file_path).expanduser()
+    if not path.is_file():
+        raise ServiceNowError(f"File not found: {path}")
+    name = file_name or path.name
+    ctype = content_type or mimetypes.guess_type(name)[0] or "application/octet-stream"
+    c = await _client(instance)
+    res = await c.request("POST", "/api/now/attachment/file", content=path.read_bytes(),
+                          content_type=ctype, params={"table_name": table, "table_sys_id": sys_id,
+                                                      "file_name": name})
+    rec = res["result"]
+    return {"sys_id": rec["sys_id"], "file_name": rec["file_name"], "size_bytes": rec["size_bytes"],
+            "content_type": rec["content_type"], "table": table, "record": sys_id,
+            "download_link": rec.get("download_link")}
 
 
 @mcp.tool()

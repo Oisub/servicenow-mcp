@@ -101,16 +101,21 @@ class SNClient:
     # ------------------------------------------------------------------ REST
 
     async def request(self, method: str, path: str, *, params: dict | None = None,
-                      json: Any = None) -> Any:
+                      json: Any = None, content: bytes | None = None,
+                      content_type: str | None = None) -> Any:
+        """REST call with retries. Pass `content` + `content_type` to send a raw body (attachments)."""
         last_exc: Exception | None = None
         renewed = False
         for attempt in range(MAX_RETRIES):
             # Stateless REST: a reused session would keep a stale current update set / application
             # after they are switched, so changes would be captured in the wrong update set.
             self._http.cookies.clear()
-            headers = {"Authorization": f"Bearer {await self._bearer()}"} if self._oauth else None
+            headers = {"Authorization": f"Bearer {await self._bearer()}"} if self._oauth else {}
+            if content_type:
+                headers["Content-Type"] = content_type
             try:
-                resp = await self._http.request(method, path, params=params, json=json, headers=headers)
+                resp = await self._http.request(method, path, params=params, json=json,
+                                                content=content, headers=headers)
             except (httpx.ConnectError, httpx.ReadTimeout, httpx.RemoteProtocolError) as e:
                 last_exc = e
                 await asyncio.sleep(2 ** attempt)

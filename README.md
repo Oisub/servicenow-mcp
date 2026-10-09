@@ -115,7 +115,7 @@ developer portal) — it logs `HIBERNATING` instead. Check the Developer Program
 |---|---|
 | Instances | `list_instances`, `use_instance`, `add_instance` (dialog), `remove_instance`, `keepalive_status` |
 | Schema | `describe_table` (fields incl. inherited, types, references) |
-| Records | `query_records`, `get_record`, `create_record`, `update_record`, `delete_record`, `aggregate` |
+| Records | `query_records`, `get_record`, `create_record`, `update_record`, `delete_record`, `aggregate`, `upload_attachment` (attach a local file to a record) |
 | Dev / debug | `run_script` (Scripts - Background, any scope), `search_scripts` (code search across script tables), `get_logs` (syslog) |
 | Impact & audit | `where_used` (every code/condition and metadata reference to a table/field/script - impact analysis before a change), `change_history` (what changed from sys_update_xml, by time/app/user/type/update set) |
 | Debugging | `check_access` (impersonate a user: read/write/create/delete + field checks, every relevant ACL with roles/condition/script result), `flow_executions` (Flow Designer runs: state, errors, logs, approvals for a record), `email_trace` (events → emails → notifications for a record, condition match, mail settings), `run_atf` (run a test or suite, per-step results) |
